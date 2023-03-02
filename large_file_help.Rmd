@@ -1,0 +1,69 @@
+---
+title: "Making smaller datasets for Shiny app demos"
+author: "Casey O'Hara"
+date: "2023-03-02"
+output: html_document
+---
+
+```{r setup, echo = TRUE, warning = FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(here)
+```
+
+## Tabular data
+
+If you have huge tabular data files (CSV or Excel for example), you might want to create a smaller subset to use as you're developing your Shiny app - quicker load times, quicker filtering/joining etc.  Sample the data, write it out, and use that in your Shiny App at least until you've finished testing and developing it.  Add the large file to your `.gitignore` if it's too big to go on Github!
+
+```{r}
+penguins_full <- palmerpenguins::penguins
+penguins_10_pct <- penguins_full %>%
+  sample_frac(0.10)
+penguins_100_count <- penguins_full %>%
+  sample_n(100)
+write_csv(penguins_10_pct, here('data/penguins_sample.csv'))
+```
+
+You may also want to try the `data.table` package - the syntax is kind of inscrutable, but at the very least, the `data.table::fread` function is a super fast way to read in data.  You can use `data.table::fread` as a drop-in replacement for `readr::read_csv` and not face too many problems.
+
+```{r}
+set.seed(123)
+penguins_huge <- penguins_full %>%
+  sample_n(500000, replace = TRUE)
+write_csv(penguins_huge, here('data/penguins_huge.csv'))
+
+### read in a bunch of times with old read.csv
+system.time({
+  x <- lapply(1:20, FUN = function(x) {
+    read.csv(here('data/penguins_huge.csv'))
+    })
+}) ### 20 sec
+system.time({
+  x <- lapply(1:20, FUN = function(x) {
+    read_csv(here('data/penguins_huge.csv'), show_col_types = FALSE)
+    })
+}) ### 6 sec
+system.time({
+  x <- lapply(1:20, FUN = function(x) {
+    data.table::fread(here('data/penguins_huge.csv'))
+    })
+}) ### 2.8 sec
+```
+
+## Raster spatial data
+
+It's tougher to subset rasters by random sampling; but you can look at `terra::aggregate()` to gather multiple fine-resolution cells into a single coarse-resolution cell (and repeat this across the raster).  You can specify the aggregation factor (e.g., a factor of 5 means take every 5x5 chunk of cells and convert to a single cell) and the function (sum, mean, min/max, etc, or define your own).
+
+It's also very easy to simply crop your raster down to a more manageable study area, for example instead of a nation-wide raster, focus on a single state.
+
+Once you have a smaller working raster, write out with `writeRaster()` and then load that instead of the full-scale raster, at least until you've finished your Shiny app!
+
+## Vector spatial data
+
+Like rasters, it would be easy to filter your simple features spatial data to a smaller region of study, e.g., one state instead of the entire nation.
+
+Another thing to consider is to simplify the geometry - if your spatial data is very fine-resolution (e.g., every little nook and cranny along a complex coastline), it will be large files and slow to load, analyze, and plot.  The `st_simplify()` function will identify and eliminate certain points along the boundary to make a more simplified outline, based on the `dTolerance` argument (larger means more aggressive simplification).  Play with the `dTolerance` until you get a smaller file but the result is not visually messed up...
+
+Once you have a solid working vector dataset, you can write it out using `st_write()` and then load that smaller dataset for testing and design of your Shiny app.
+
+
