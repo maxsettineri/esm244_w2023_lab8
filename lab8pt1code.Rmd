@@ -1,0 +1,132 @@
+---
+title: "lab 8 part 1"
+author: "Max Settineri"
+date: "2023-03-02"
+output: html_document
+---
+
+```{r setup, include = TRUE, warning = FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning= FALSE, message = FALSE)
+library(spatstat)
+library(terra) 
+library(tidyverse)
+library(here)
+library(sf)
+library(tmap)
+```
+
+
+## Read in red tree vole data
+
+```{r}
+voles_sf <- read_sf(dsn = here('redtreevoledata'),
+                    layer = 'ds033') %>% 
+  janitor::clean_names() %>% 
+  select(county) %>% 
+  filter(county == 'HUM') %>% 
+  st_transform(crs = 32610)
+
+plot(voles_sf)
+```
+
+## Get Humboldt County outline
+
+```{r}
+humboldt_sf <- read_sf(here('redtreevoledata', 'california_county_shape_file.shp')) %>% 
+  janitor::clean_names() %>% 
+  filter(name == 'Humboldt') %>% 
+  select(name) %>% 
+  st_set_crs(4326) %>% 
+  st_transform(32610)
+```
+
+## Plot data and county
+
+```{r}
+ggplot() +
+  geom_sf(data = humboldt_sf,
+          color = 'darkorchid',
+          fill = 'darkorchid4',
+          size = 1) +
+  geom_sf(data = voles_sf,
+          color = 'orange',
+          aplha = .7,
+          size = 2) +
+  theme_void()
+```
+
+## Convert `sf` onjects to `spatstat` objects
+
+```{r}
+## convert voles observations to spatial point pattern
+voles_ppp <- as.ppp(voles_sf)
+
+## convert county to owin onject
+humboldt_win <- as.owin(humboldt_sf)
+
+## combine together into a point patter object (points + window)
+voles_full <- ppp(voles_ppp$x, voles_ppp$y, window = humboldt_win)
+
+plot(voles_full)
+```
+
+## Make a kernel density plot
+
+```{r}
+voles_density <- density(voles_full, sigma = 5000)
+plot(voles_density)
+```
+
+### Map it in tmap
+
+```{r}
+## convert density object to raster
+vole_r <- rast(voles_density)
+crs(vole_r) <- crs(voles_sf)
+
+## now plot
+tmap_mode('view')
+tm_shape(vole_r) +
+  tm_raster(midpoint = NA, palette = 'Reds', legend.show = FALSE)
+```
+
+## Statistically analyze with a G function
+
+```{r}
+## make a sequence of distances over which we'll calculate G(r)
+r_vec <- seq(0, 10000, by = 100)
+
+gfunction <- envelope(voles_full, fun = Gest, r = r_vec,
+                      nsim = 100)
+
+gfunction_long <- gfunction %>% 
+  as.data.frame() %>% 
+  pivot_longer(names_to = 'model', values_to = 'g_val',
+               cols = obs:hi)
+
+ggplot(data = gfunction_long, aes(x = r, y = g_val)) +
+  geom_line(aes(color = model, group = model)) +
+  theme_minimal() +
+  labs(x = 'radius (m)', y = 'G(r)')
+
+```
+
+## Lets try on an L function
+
+```{r}
+r_vec2 <- seq(0, 80000, by = 5000)
+
+lfunction <- envelope(voles_full, fun = Lest, r = r_vec2,
+                      nsim = 10)
+
+lfunction_long <- lfunction %>% 
+  as.data.frame() %>% 
+  pivot_longer(cols = obs:hi, names_to = 'model', values_to = 'l')
+
+ggplot(data = lfunction_long,
+       aes(x = r, y = l)) +
+  geom_line(aes(color = model, group = model)) +
+  theme_minimal() +
+  labs(x = 'radius', y = 'L(r)')
+```
+
