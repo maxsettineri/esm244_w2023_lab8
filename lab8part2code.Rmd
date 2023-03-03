@@ -1,0 +1,191 @@
+---
+title: "Lab 8 part 2"
+author: "Max Settineri"
+date: "2023-03-02"
+output: html_document
+---
+
+```{r setup, include = TRUE, warning = FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning= FALSE, message = FALSE)
+library(tidyverse)
+library(here)
+library(lubridate)
+library(tsibble)
+library(feasts)
+library(slider)
+```
+
+## Read in data
+
+```{r}
+toolik <- read_csv(here('data/toolikweather.csv')) 
+
+toolik_ts <- toolik %>% 
+  mutate(date = mdy(date)) %>% 
+  as_tsibble(key = NULL, index = date)
+
+ggplot(data = toolik_ts, aes(x = date, y = mean_airtemp)) +
+  geom_line() +
+  labs(x = "Date",
+       y = "Mean daily air temperature (Celsius)\n at Toolik Station")
+```
+
+## Use `index_by()` to aggregate time series by increments
+
+```{r}
+toolik_month <- toolik_ts %>% 
+  index_by(yr_mo = ~yearmonth(.)) %>% 
+  summarize(monthly_mean_temp = mean(mean_airtemp, na.rm = TRUE))
+
+ggplot(toolik_month, aes(x = yr_mo, y = monthly_mean_temp)) +
+  geom_line()
+
+toolik_month %>% 
+  ggplot(aes(x = year(yr_mo), y = monthly_mean_temp)) +
+  geom_line() +
+  facet_wrap(~ month(yr_mo, label = TRUE)) +
+  labs(x = 'Year', y = 'Annual mean air temp (C)',
+       title = 'Toolik Station mean annual air temperature',
+       subtitle = '1988-2018',
+       caption = 'Source: Shaver, G. 2019. A multi-year daily weather file
+       for the Toolik Field Station at Toolik Lake, AK, starting 1988 to present. 
+       Ver. 4. Environmental Data Inititative')
+```
+
+### Group by other increments in 'index_by'
+
+```{r}
+toolik_annual <- toolik_ts %>% 
+  index_by(yearly = ~year(.)) %>% 
+  summarize(annual_airtemp = mean(mean_airtemp, na.rm = TRUE))
+
+ggplot(toolik_annual, aes(x = yearly, y = annual_airtemp)) +
+  geom_line() 
+
+toolik_weekly <- toolik_ts %>% 
+  index_by(weekly = ~yearweek(.)) %>% 
+  summarize(weekly_airtemp = mean(mean_airtemp, na.rm = TRUE))
+
+ggplot(toolik_weekly, aes(x = weekly, y = weekly_airtemp)) +
+  geom_line()
+```
+
+## Use filter_index to grab different date/time combos
+
+```{r}
+toolik_ts %>% 
+  filter_index('2000-06' ~ '2001-10')
+
+toolik_ts %>% 
+  filter_index('2006-04-10' ~ '2006-05-15')
+
+toolik_ts %>% 
+  filter_index('2017-12-20' ~ .) # from date till end of data set
+```
+
+## Exploring seasonality
+
+```{r}
+toolik_ts %>% 
+  filter_index('2014' ~ .) %>% 
+  feasts::gg_season(y = mean_airtemp)
+
+toolik_month %>% 
+  gg_season(y = monthly_mean_temp) +
+  labs(x = 'year', y = 'mean monthly air temp (C)')
+```
+
+## Seasonal subseries plots
+
+```{r}
+toolik_month %>% 
+  gg_subseries(y = monthly_mean_temp)
+```
+
+## Moving averages in tsibbles
+
+We'll use the `slider` package to find moving (or rolling) averages for different window sizes. 
+
+The general structure will tend to be something like: 
+
+`df %>% slide(variable, function, .before = , .after = )`
+
+Let's make a test vector just so we can see how this works: 
+
+```{r}
+set.seed(2023)
+test<- rnorm(100, mean = 40, sd = 10)
+
+### Show the series based on values +2 and -2 from each observation
+### Use ~.x to show the windows
+w05 <- slide(test, ~.x, .before = 2, .after = 2)
+
+### Change that to a function name to actually calculate something for each window
+### Note that I add `as.numeric` here, since the outcome is otherwise a list
+w05 <- as.numeric(slide(test, mean, .before = 2, .after = 2))
+
+### Find the mean value of a window with n = 11, centered:
+w11 <- as.numeric(slide(test, mean, .before = 5, .after = 5))
+
+### Find the mean value of a window with n = 19, centered:
+w19 <- as.numeric(slide(test, mean, .before = 9, .after = 9))
+
+### Plot these together: 
+combo <- data_frame(time = seq(1:100), test, w05, w11, w19) %>%
+  pivot_longer(cols = test:w19, names_to = 'series', values_to = 'value')
+
+
+ggplot(data = combo) +
+  geom_line(aes(x = time, y = value, color = series)) +
+  scale_color_manual(values = c('grey70', 'red', 'orange', 'purple')) +
+  theme_minimal()
+```
+
+## Find moving average on Toolik time series
+
+```{r}
+roll_toolik_15 <- toolik_ts %>% 
+  mutate(ma_15d = as.numeric(slide(toolik_ts$mean_airtemp, mean, 
+                                   .before = 7, .after = 7)))
+
+roll_toolik_61 <- toolik_ts %>% 
+  mutate(ma_61d = as.numeric(slide(toolik_ts$mean_airtemp, mean, 
+                                   .before = 30, .after = 30)))
+
+
+ggplot() +
+  geom_line(data = toolik_ts, aes(x = date, y = mean_airtemp), 
+            size = 0.2, color = "gray") +
+  geom_line(data = roll_toolik_15, aes(x = date, y = ma_15d), 
+            color = "orange") +
+  geom_line(data = roll_toolik_61, aes(x = date, y = ma_61d), 
+            color = "blue") +
+  theme_minimal()
+
+```
+
+## Autocorrelation function
+
+We'll look at outcomes for both daily lags (yikes) and monthly lags (cool).
+
+```{r}
+toolik_ts %>%
+  ACF(mean_airtemp) %>%
+  autoplot()
+
+toolik_month %>% 
+  ACF(monthly_mean_temp) %>% 
+  autoplot()
+```
+
+## Decomposition
+
+Here we will use STL decomposition (Seasonal, Trend, and Loess) decomposition. You can read about the advantages of STL decomposition here: https://otexts.com/fpp2/stl.html.
+
+
+```{r}
+toolik_dec <- toolik_month %>% 
+  model(STL(monthly_mean_temp ~ season(window = Inf)))
+
+components(toolik_dec) %>% autoplot()
+```
